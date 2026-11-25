@@ -1,0 +1,777 @@
+import React, { useState, useEffect } from 'react';
+import {
+  Container,
+  Paper,
+  Typography,
+  Box,
+  Button,
+  TextField,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  CircularProgress,
+  Snackbar,
+  Alert,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Chip,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  Tabs,
+  Tab,
+  Card,
+  CardContent,
+  useTheme,
+  useMediaQuery,
+  Grid
+} from '@mui/material';
+import { useAppSelector } from '../../redux/hooks';
+import { User as UserType } from '../../types';
+import { getBloodInventory, getDonors, registerAsDonor } from '../../services/bloodDonationService';
+
+interface BloodInventoryItem {
+  _id: string;
+  bloodGroup: string;
+  units: number;
+  lastUpdated: string;
+  updatedBy: {
+    _id: string;
+    name: string;
+    email: string;
+  } | null;
+}
+
+interface BloodRequest {
+  _id: string;
+  patientName: string;
+  bloodGroup: string;
+  units: number;
+  hospital: string;
+  urgency: 'low' | 'medium' | 'high' | 'critical';
+  status: 'pending' | 'approved' | 'rejected' | 'completed';
+  contactNumber: string;
+  reason?: string;
+  createdAt: string;
+  updatedAt: string;
+  userId: string;
+}
+
+interface SnackbarState {
+  open: boolean;
+  message: string;
+  severity: 'success' | 'error' | 'info' | 'warning';
+}
+
+interface TabPanelProps {
+  children?: React.ReactNode;
+  index: number;
+  value: number;
+}
+
+function TabPanel(props: TabPanelProps) {
+  const { children, value, index, ...other } = props;
+
+  return (
+    <div
+      role="tabpanel"
+      hidden={value !== index}
+      id={`blood-tabpanel-${index}`}
+      aria-labelledby={`blood-tab-${index}`}
+      {...other}
+    >
+      {value === index && <Box sx={{ p: 3 }}>{children}</Box>}
+    </div>
+  );
+}
+
+function a11yProps(index: number) {
+  return {
+    id: `blood-tab-${index}`,
+    'aria-controls': `blood-tabpanel-${index}`,
+  };
+}
+
+const BloodDonationPage: React.FC = () => {
+  const { user } = useAppSelector((state) => state.auth);
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  
+  const [tabValue, setTabValue] = useState(0);
+  const [inventory, setInventory] = useState<BloodInventoryItem[]>([]);
+  const [donors, setDonors] = useState<any[]>([]);
+  const [requests, setRequests] = useState<BloodRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingRequests, setLoadingRequests] = useState(false);
+  const [loadingDonors, setLoadingDonors] = useState(true);
+  const [loadingInventory, setLoadingInventory] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [openRequestDialog, setOpenRequestDialog] = useState(false);
+  const [snackbar, setSnackbar] = useState<SnackbarState>({
+    open: false,
+    message: '',
+    severity: 'info',
+  });
+
+  const fetchUserBloodRequests = async (): Promise<BloodRequest[]> => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      throw new Error('Authentication required');
+    }
+
+    const response = await fetch(
+      `${process.env.REACT_APP_API_URL || 'http://localhost:5000'}/api/blood-requests/my-requests`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch blood requests');
+    }
+
+    return response.json();
+  };
+
+  useEffect(() => {
+    let isMounted = true;
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setError('Please log in to view this page');
+      return;
+    }
+
+    const loadData = async () => {
+      try {
+        // Load donors
+        setLoadingDonors(true);
+        try {
+          const donorsData = await getDonors(token);
+          if (isMounted) {
+            setDonors(Array.isArray(donorsData) ? donorsData : []);
+          }
+        } catch (err) {
+          console.error('Error loading donors:', err);
+        } finally {
+          if (isMounted) setLoadingDonors(false);
+        }
+
+        // Load inventory
+        setLoadingInventory(true);
+        try {
+          const inventoryData = await getBloodInventory(token);
+          if (isMounted) {
+            setInventory(inventoryData || []);
+          }
+        } catch (err) {
+          console.error('Error loading inventory:', err);
+        } finally {
+          if (isMounted) setLoadingInventory(false);
+        }
+
+        // Fetch user's blood requests
+        if (isMounted) {
+          setLoadingRequests(true);
+          try {
+            const data = await fetchUserBloodRequests();
+            setRequests(data);
+          } catch (err) {
+            console.error('Error loading requests:', err);
+            setError('Failed to load blood requests');
+          } finally {
+            setLoadingRequests(false);
+          }
+        }
+      } catch (err) {
+        console.error('Error loading data:', err);
+        if (isMounted) {
+          setError('Failed to load data. Please try again.');
+        }
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user]);
+
+  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
+    setTabValue(newValue);
+    if (newValue === 2) {
+      // My Requests tab
+      fetchUserBloodRequests()
+        .then((data) => setRequests(data))
+        .catch((err) =>
+          setError(err instanceof Error ? err.message : 'Failed to load requests')
+        );
+    }
+  };
+
+  const handleRegisterAsDonor = async (): Promise<void> => {
+    if (!user) {
+      setError('You must be logged in to register as a donor');
+      return;
+    }
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setError('Authentication required');
+      return;
+    }
+
+    try {
+      await registerAsDonor(user._id, token);
+      // Reload donors list
+      const donorsData = await getDonors(token);
+      setDonors(Array.isArray(donorsData) ? donorsData : []);
+      setSnackbar({
+        open: true,
+        message: 'Successfully registered as a blood donor!',
+        severity: 'success',
+      });
+    } catch (err) {
+      console.error('Error registering as donor:', err);
+      setSnackbar({
+        open: true,
+        message: err instanceof Error ? err.message : 'Failed to register as donor',
+        severity: 'error',
+      });
+    }
+  };
+
+  const submitBloodRequest = async (data: {
+    patientName: string;
+    patientAge: number;
+    bloodGroup: string;
+    units: number;
+    hospital: string;
+    urgency: 'low' | 'medium' | 'high' | 'critical';
+    contactNumber: string;
+    reason?: string;
+  }): Promise<void> => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      throw new Error('Authentication required');
+    }
+
+    const response = await fetch(
+      `${process.env.REACT_APP_API_URL || 'http://localhost:5000'}/api/blood-requests`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(data),
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || 'Failed to submit blood request');
+    }
+
+    return response.json();
+  };
+
+  const renderBloodAvailability = () => {
+    const bloodGroups = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
+
+    return (
+      <TabPanel value={tabValue} index={0}>
+        <Typography variant="h6" gutterBottom>
+          Blood Availability
+        </Typography>
+        <Grid container spacing={2}>
+          {bloodGroups.map((group) => {
+            const inventoryItem =
+              inventory.find((item) => item.bloodGroup === group) || {
+                _id: '',
+                bloodGroup: group,
+                units: 0,
+                lastUpdated: new Date().toISOString(),
+                updatedBy: null,
+              };
+
+            const isLowStock = inventoryItem.units < 5;
+            const isCritical = inventoryItem.units === 0;
+
+            return (
+              <Grid item xs={6} sm={4} md={3} key={group}>
+                <Card
+                  sx={{
+                    textAlign: 'center',
+                    border: `2px solid ${
+                      isCritical ? 'red' : isLowStock ? 'orange' : 'transparent'
+                    }`,
+                    height: '100%',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <CardContent>
+                    <Typography
+                      variant="h4"
+                      component="div"
+                      color={isCritical ? 'error' : 'primary'}
+                    >
+                      {group}
+                    </Typography>
+                    <Typography variant="h3" component="div" sx={{ my: 2 }}>
+                      {inventoryItem.units}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {isCritical ? 'Out of Stock' : isLowStock ? 'Low Stock' : 'In Stock'}
+                    </Typography>
+                    <Typography variant="caption" display="block" sx={{ mt: 1 }}>
+                      Last updated: {new Date(inventoryItem.lastUpdated).toLocaleString()}
+                    </Typography>
+                  </CardContent>
+                </Card>
+              </Grid>
+            );
+          })}
+        </Grid>
+      </TabPanel>
+    );
+  };
+
+  const renderMyRequests = () => {
+    if (loadingRequests) {
+      return (
+        <Box display="flex" justifyContent="center" my={4}>
+          <CircularProgress />
+        </Box>
+      );
+    }
+
+    if (error) {
+      return (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+      );
+    }
+
+    if (requests.length === 0) {
+      return <Typography>No blood requests found.</Typography>;
+    }
+
+    return (
+      <TableContainer component={Paper}>
+        <Table size={isMobile ? 'small' : 'medium'}>
+          <TableHead>
+            <TableRow>
+              <TableCell>Patient Name</TableCell>
+              <TableCell align="center">Blood Group</TableCell>
+              <TableCell align="center">Units</TableCell>
+              <TableCell>Hospital</TableCell>
+              <TableCell>Status</TableCell>
+              <TableCell>Date</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {requests.map((request) => (
+              <TableRow
+                key={request._id}
+                sx={{ '&:last-child td, &:last-child th': { border: 0 } }}
+              >
+                <TableCell component="th" scope="row">
+                  {request.patientName}
+                </TableCell>
+                <TableCell align="center">{request.bloodGroup}</TableCell>
+                <TableCell align="center">{request.units}</TableCell>
+                <TableCell>{request.hospital}</TableCell>
+                <TableCell>
+                  <Chip
+                    label={request.status}
+                    color={
+                      request.status === 'approved'
+                        ? 'success'
+                        : request.status === 'rejected'
+                        ? 'error'
+                        : request.status === 'pending'
+                        ? 'warning'
+                        : 'default'
+                    }
+                    size="small"
+                  />
+                </TableCell>
+                <TableCell>{new Date(request.createdAt).toLocaleString()}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+    );
+  };
+
+  return (
+    <Container maxWidth="lg">
+      <Box sx={{ width: '100%', mt: 3, mb: 4 }}>
+        <Typography variant="h4" component="h1" gutterBottom>
+          Blood Donation & Requests
+        </Typography>
+
+        <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
+          <Tabs
+            value={tabValue}
+            onChange={handleTabChange}
+            aria-label="blood donation tabs"
+            variant="scrollable"
+            scrollButtons="auto"
+          >
+            <Tab label="Blood Availability" {...a11yProps(0)} />
+            <Tab label="Donors" {...a11yProps(1)} />
+            <Tab label="My Requests" {...a11yProps(2)} />
+          </Tabs>
+        </Box>
+
+        {renderBloodAvailability()}
+
+        <TabPanel value={tabValue} index={1}>
+          <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+            <Typography variant="h6" gutterBottom>
+              Registered Donors
+            </Typography>
+            <Button
+              variant="contained"
+              color="primary"
+              onClick={handleRegisterAsDonor}
+              disabled={loadingDonors || donors.some((d) => d.userId === user?._id)}
+            >
+              {donors.some((d) => d.userId === user?._id) ? 'Already Registered' : 'Register as Donor'}
+            </Button>
+          </Box>
+
+          {loadingDonors ? (
+            <Box display="flex" justifyContent="center" my={4}>
+              <CircularProgress />
+            </Box>
+          ) : (
+            <TableContainer component={Paper}>
+              <Table size={isMobile ? 'small' : 'medium'}>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Name</TableCell>
+                    <TableCell>Blood Group</TableCell>
+                    <TableCell>Last Donation</TableCell>
+                    <TableCell>Contact</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {donors.length > 0 ? (
+                    donors.map((donor) => (
+                      <TableRow key={donor._id}>
+                        <TableCell>{donor.name}</TableCell>
+                        <TableCell>{donor.bloodGroup}</TableCell>
+                        <TableCell>
+                          {donor.lastDonation
+                            ? new Date(donor.lastDonation).toLocaleDateString()
+                            : 'Never'}
+                        </TableCell>
+                        <TableCell>{donor.contactNumber || 'N/A'}</TableCell>
+                      </TableRow>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={4} align="center">
+                        No donors found. Be the first to register!
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={2}>
+          <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+            <Typography variant="h6" gutterBottom>
+              My Blood Requests
+            </Typography>
+            <Button
+              variant="contained"
+              color="primary"
+              onClick={() => setOpenRequestDialog(true)}
+            >
+              New Request
+            </Button>
+          </Box>
+          {renderMyRequests()}
+        </TabPanel>
+
+        {/* Blood Request Dialog */}
+        <BloodRequestForm
+          open={openRequestDialog}
+          onClose={() => setOpenRequestDialog(false)}
+          onSuccess={() => {
+            setSnackbar({
+              open: true,
+              message: 'Blood request submitted successfully!',
+              severity: 'success',
+            });
+            // Refresh requests
+            fetchUserBloodRequests()
+              .then((data) => setRequests(data))
+              .catch((err) => console.error('Error fetching requests:', err));
+          }}
+          isMobile={isMobile}
+        />
+
+        {/* Snackbar for notifications */}
+        <Snackbar
+          open={snackbar.open}
+          autoHideDuration={6000}
+          onClose={() => setSnackbar((prev) => ({ ...prev, open: false }))}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        >
+          <Alert
+            onClose={() => setSnackbar((prev) => ({ ...prev, open: false }))}
+            severity={snackbar.severity}
+            sx={{ width: '100%' }}
+          >
+            {snackbar.message}
+          </Alert>
+        </Snackbar>
+      </Box>
+    </Container>
+  );
+};
+
+// Blood Request Form Component
+interface BloodRequestFormData {
+  patientName: string;
+  patientAge: number;
+  bloodGroup: string;
+  units: number;
+  hospital: string;
+  urgency: 'low' | 'medium' | 'high' | 'critical';
+  contactNumber: string;
+  reason: string;
+}
+
+interface BloodRequestFormProps {
+  open: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+  isMobile?: boolean;
+}
+
+const BloodRequestForm: React.FC<BloodRequestFormProps> = ({
+  open,
+  onClose,
+  onSuccess,
+  isMobile = false,
+}) => {
+  const [formData, setFormData] = useState<BloodRequestFormData>({
+    patientName: '',
+    patientAge: 18,
+    bloodGroup: '',
+    units: 1,
+    hospital: '',
+    urgency: 'medium',
+    contactNumber: '',
+    reason: '',
+  });
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | { name?: string; value: unknown }>) => {
+    const { name, value } = e.target;
+    if (name) {
+      setFormData((prev) => ({
+        ...prev,
+        [name]: value,
+      }));
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('Authentication required');
+      }
+
+      const response = await fetch(
+        `${process.env.REACT_APP_API_URL || 'http://localhost:5000'}/api/blood-requests`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(formData),
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || 'Failed to submit blood request');
+      }
+
+      onSuccess();
+      onClose();
+    } catch (err) {
+      console.error('Error submitting blood request:', err);
+      setError(err instanceof Error ? err.message : 'Failed to submit request');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
+      <form onSubmit={handleSubmit}>
+        <DialogTitle>New Blood Request</DialogTitle>
+        <DialogContent>
+          {error && (
+            <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
+              {error}
+            </Alert>
+          )}
+          <Grid container spacing={2} sx={{ mt: 1 }}>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Patient Name"
+                name="patientName"
+                value={formData.patientName}
+                onChange={handleChange}
+                required
+                margin="normal"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Patient Age"
+                name="patientAge"
+                type="number"
+                value={formData.patientAge}
+                onChange={handleChange}
+                required
+                margin="normal"
+                inputProps={{ min: 1, max: 120 }}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <FormControl fullWidth margin="normal" required>
+                <InputLabel>Blood Group</InputLabel>
+                <Select
+                  name="bloodGroup"
+                  value={formData.bloodGroup}
+                  onChange={handleChange}
+                  label="Blood Group"
+                >
+                  <MenuItem value="A+">A+</MenuItem>
+                  <MenuItem value="A-">A-</MenuItem>
+                  <MenuItem value="B+">B+</MenuItem>
+                  <MenuItem value="B-">B-</MenuItem>
+                  <MenuItem value="AB+">AB+</MenuItem>
+                  <MenuItem value="AB-">AB-</MenuItem>
+                  <MenuItem value="O+">O+</MenuItem>
+                  <MenuItem value="O-">O-</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Units Required"
+                name="units"
+                type="number"
+                value={formData.units}
+                onChange={handleChange}
+                required
+                margin="normal"
+                inputProps={{ min: 1 }}
+              />
+            </Grid>
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
+                label="Hospital Name"
+                name="hospital"
+                value={formData.hospital}
+                onChange={handleChange}
+                required
+                margin="normal"
+              />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <FormControl fullWidth margin="normal" required>
+                <InputLabel>Urgency</InputLabel>
+                <Select
+                  name="urgency"
+                  value={formData.urgency}
+                  onChange={handleChange}
+                  label="Urgency"
+                >
+                  <MenuItem value="low">Low</MenuItem>
+                  <MenuItem value="medium">Medium</MenuItem>
+                  <MenuItem value="high">High</MenuItem>
+                  <MenuItem value="critical">Critical</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                label="Contact Number"
+                name="contactNumber"
+                value={formData.contactNumber}
+                onChange={handleChange}
+                required
+                margin="normal"
+              />
+            </Grid>
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
+                label="Reason for Request"
+                name="reason"
+                value={formData.reason}
+                onChange={handleChange}
+                multiline
+                rows={3}
+                margin="normal"
+              />
+            </Grid>
+          </Grid>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={onClose} disabled={loading}>
+            Cancel
+          </Button>
+          <Button type="submit" color="primary" variant="contained" disabled={loading}>
+            {loading ? <CircularProgress size={24} /> : 'Submit Request'}
+          </Button>
+        </DialogActions>
+      </form>
+    </Dialog>
+  );
+};
+
+export default BloodDonationPage;
